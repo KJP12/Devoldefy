@@ -7,16 +7,12 @@ import org.cadixdev.mercury.Mercury;
 import org.cadixdev.mercury.remapper.MercuryRemapper;
 
 import java.io.*;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 public class Devoldefy {
     private static final String CSV = "http://export.mcpbot.bspk.rs/mcp_{csv_type}_nodoc/{csv_build}-{mc_version}/mcp_{csv_type}_nodoc-{csv_build}-{mc_version}.zip";
@@ -39,21 +35,27 @@ public class Devoldefy {
         String sourceRoot = ask("Path to source root", "./src/main/java");
         String targetRoot = ask("Path to target root", "./updated_src/main/java");
 
+        devoldefy(files, sourceMinecraftVersion, sourceMappingsVersion, sourceForgeVersion, sourceMappingsType, sourceMappingsBuild, targetMinecraftVersion, targetYarnBuild, sourceRoot, targetRoot);
+    }
+
+    public static void devoldefy(File files, String sourceMinecraftVersion, String sourceMappingsVersion, String sourceForgeVersion,
+                                 String sourceMappingsType, String sourceMappingsBuild, String targetMinecraftVersion, String targetYarnBuild,
+                                 String sourceRoot, String targetRoot) throws Exception {
         String csvUrl = CSV.replace("{mc_version}", sourceMappingsVersion).replace("{csv_type}", sourceMappingsType).replace("{csv_build}", sourceMappingsBuild);
         String srgUrl = SRG.replace("{mc_version}", targetMinecraftVersion);
         String yarnUrl = YARN.replace("{target_minecraft_version}", targetMinecraftVersion).replace("{yarn_build}", targetYarnBuild);
         String forgeLocation = FORGE_JAR.replace("{home_dir}", System.getProperty("user.home")).replace("{mc_version}", sourceMinecraftVersion).replace("{forge_version}", sourceForgeVersion).replace("{csv_type}", sourceMappingsType).replace("{csv_build}", sourceMappingsBuild);
 
-        Mappings srg = readTsrg(
-                new Scanner(download(srgUrl, files)),
-                readCsv(new Scanner(extract(download(csvUrl, files), "fields.csv", files))),
-                readCsv(new Scanner(extract(download(csvUrl, files), "methods.csv", files)))
+        Mappings srg = Readers.tsrg(
+            new Scanner(FileHelper.download(srgUrl, files)),
+            Readers.csv(new Scanner(FileHelper.extract(FileHelper.download(csvUrl, files), "fields.csv", files))),
+            Readers.csv(new Scanner(FileHelper.extract(FileHelper.download(csvUrl, files), "methods.csv", files)))
         );
 
-        Mappings yarn = readTiny(
-                new Scanner(extract(download(yarnUrl, files), "mappings/mappings.tiny", files)),
-                "official",
-                "named"
+        Mappings yarn = Readers.tiny(
+            new Scanner(FileHelper.extract(FileHelper.download(yarnUrl, files), "mappings/mappings.tiny", files)),
+            "official",
+            "named"
         );
 
         Mappings mappings = srg.invert().chain(yarn);
@@ -79,46 +81,7 @@ public class Devoldefy {
         return result.isEmpty() ? fallback : result;
     }
 
-    private static File download(String url, File directory) throws IOException {
-        directory.mkdirs();
-        File file = new File(directory, hash(url));
-
-        if (!file.exists()) {
-            try (InputStream in = new URL(url).openStream()) {
-                Files.copy(in, file.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            }
-        }
-
-        return file;
-    }
-
-    private static File extract(File zip, String path, File directory) throws IOException {
-        directory.mkdirs();
-        File file = new File(directory, hash(zip.getName() + path));
-
-        try (ZipFile zipFile = new ZipFile(zip)) {
-            InputStream is = null;
-
-            Enumeration<? extends ZipEntry> entries = zipFile.entries();
-            while (entries.hasMoreElements()) {
-                ZipEntry zipEntry = entries.nextElement();
-                if (zipEntry.getName().equals(path)) {
-                    is = zipFile.getInputStream(zipEntry);
-                    break;
-                }
-            }
-
-            if (is == null) {
-                return null;
-            }
-
-            Files.copy(is, file.toPath(), StandardCopyOption.REPLACE_EXISTING);
-        }
-
-        return file;
-    }
-
-    private static String hash(String s) {
+    static String hash(String s) {
         try {
             byte[] hash = MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8));
 
@@ -131,103 +94,6 @@ public class Devoldefy {
         } catch (NoSuchAlgorithmException e) {
             throw new AssertionError(e);
         }
-    }
-
-    private static Mappings readTsrg(Scanner s, Map<String, String> fieldNames, Map<String, String> methodNames) {
-        Map<String, String> classes = new LinkedHashMap<>();
-        Map<String, String> fields = new LinkedHashMap<>();
-        Map<String, String> methods = new LinkedHashMap<>();
-
-        String currentClassA = null;
-        String currentClassB = null;
-        while (s.hasNextLine()) {
-            String line = s.nextLine();
-
-            if (!line.startsWith("\t")) {
-                String[] parts = line.split(" ");
-                classes.put(parts[0], parts[1]);
-                currentClassA = parts[0];
-                currentClassB = parts[1];
-                continue;
-            }
-
-            line = line.substring(1);
-
-            String[] parts = line.split(" ");
-
-            if (parts.length == 2) {
-                fields.put(currentClassA + ":" + parts[0], currentClassB + ":" + fieldNames.getOrDefault(parts[1], parts[1]));
-            } else if (parts.length == 3) {
-                methods.put(currentClassA + ":" + parts[0] + parts[1], currentClassB + ":" + methodNames.getOrDefault(parts[2], parts[2]) + parts[1]);
-            }
-        }
-
-        Mappings mappings = new Mappings();
-        mappings.classes.putAll(classes);
-        mappings.fields.putAll(fields);
-        methods.forEach((a, b) -> mappings.methods.put(a, remapMethodDescriptor(b, classes)));
-
-        s.close();
-        return mappings;
-    }
-
-    private static Map<String, String> readCsv(Scanner s) {
-        Map<String, String> mappings = new LinkedHashMap<>();
-
-        try (Scanner r = s) {
-            r.nextLine();
-            while (r.hasNextLine()) {
-                String[] parts = r.nextLine().split(",");
-                mappings.put(parts[0], parts[1]);
-            }
-        }
-
-        s.close();
-        return mappings;
-    }
-
-    private static Mappings readTiny(Scanner s, String from, String to) {
-        String[] header = s.nextLine().split("\t");
-        Map<String, Integer> columns = new HashMap<>();
-
-        for (int i = 1; i < header.length; i++) {
-            columns.put(header[i], i - 1);
-        }
-
-        int fromColumn = columns.get(from);
-        int toColumn = columns.get(to);
-
-        Map<String, String> classes = new LinkedHashMap<>();
-        Map<String, String> fields = new LinkedHashMap<>();
-        Map<String, String> methods = new LinkedHashMap<>();
-
-        while (s.hasNextLine()) {
-            String[] line = s.nextLine().split("\t");
-            switch (line[0]) {
-                case "CLASS": {
-                    classes.put(line[fromColumn + 1], line[toColumn + 1]);
-                    break;
-                }
-
-                case "FIELD": {
-                    fields.put(line[1] + ":" + line[fromColumn + 3], classes.get(line[1]) + ":" + line[toColumn + 3]);
-                    break;
-                }
-
-                case "METHOD": {
-                    methods.put(line[1] + ":" + line[fromColumn + 3] + line[2], classes.get(line[1]) + ":" + line[toColumn + 3] + line[2]);
-                    break;
-                }
-            }
-        }
-
-        Mappings mappings = new Mappings();
-        mappings.classes.putAll(classes);
-        mappings.fields.putAll(fields);
-        methods.forEach((a, b) -> mappings.methods.put(a, remapMethodDescriptor(b, classes)));
-
-        s.close();
-        return mappings;
     }
 
     private static void remap(Path source, Path target, List<Path> classpath, Mappings mappings) throws Exception {
@@ -285,7 +151,7 @@ public class Devoldefy {
         }
     }
 
-    private static String remapMethodDescriptor(String method, Map<String, String> classMappings) {
+    static String remapMethodDescriptor(String method, Map<String, String> classMappings) {
         try {
             Reader r = new StringReader(method);
             StringBuilder result = new StringBuilder();
@@ -325,29 +191,4 @@ public class Devoldefy {
         }
     }
 
-    private static class Mappings {
-        public final Map<String, String> classes = new LinkedHashMap<>();
-        public final Map<String, String> fields = new LinkedHashMap<>();
-        public final Map<String, String> methods = new LinkedHashMap<>();
-
-        public Mappings chain(Mappings mappings) {
-            Mappings result = new Mappings();
-
-            classes.forEach((a, b) -> result.classes.put(a, mappings.classes.getOrDefault(b, b)));
-            fields.forEach((a, b) -> result.fields.put(a, mappings.fields.getOrDefault(b, b)));
-            methods.forEach((a, b) -> result.methods.put(a, mappings.methods.getOrDefault(b, b)));
-
-            return result;
-        }
-
-        public Mappings invert() {
-            Mappings result = new Mappings();
-
-            classes.forEach((a, b) -> result.classes.put(b, a));
-            fields.forEach((a, b) -> result.fields.put(b, a));
-            methods.forEach((a, b) -> result.methods.put(b, a));
-
-            return result;
-        }
-    }
 }
