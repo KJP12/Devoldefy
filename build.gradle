@@ -11,14 +11,14 @@ sourceCompatibility = 1.8
 repositories {
     mavenCentral()
     maven {
-        name = 'Fabric'
-        url = 'http://maven.modmuss50.me/'
+        name = "Sonatype"
+        url = "https://oss.sonatype.org/content/groups/public/"
     }
 }
 
 
 dependencies {
-    implementation 'org.cadixdev:mercury:0.1.0.fabric-SNAPSHOT'
+    implementation 'org.cadixdev:mercury:0.1.0-SNAPSHOT'
 }
 
 application {
